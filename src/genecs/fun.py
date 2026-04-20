@@ -1840,10 +1840,10 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
 
     check_degree, qubit_degree = compute_max_degrees(hx, hz)
     print("\n", file=output_file)
-    print("Max check degree:", check_degree)
-    print("Max check degree:", check_degree, file=output_file)
     print("Max qubit degree:", qubit_degree)
     print("Max qubit degree:", qubit_degree, file=output_file)
+    print("Max check degree:", check_degree)
+    print("Max check degree:", check_degree, file=output_file)
 
     print("\n", file=output_file)
     print("Compilation time:", t1-t0, file=output_file)
