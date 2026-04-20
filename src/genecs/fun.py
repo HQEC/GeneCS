@@ -3,14 +3,21 @@ import numpy as np
 import random
 import math
 import copy
+import os
+from bposd.css import css_code
 from itertools import count
 import itertools
 from genecs.utils import *
+from genecs.deform import *
 from collections import defaultdict, deque
+from contextlib import redirect_stdout, redirect_stderr
+import pickle
+import time
+import pandas as pd
 
 ##### Step 1: Construct vertex of graph and the bijection fuction #####
 
-def create_graph_GeneLS(logical_op):
+def create_graph_GeneCS(logical_op):
     """
     Create a graph from the logical operator.
     Parameters
@@ -42,7 +49,7 @@ def create_graph_GeneLS(logical_op):
 
 ##### Step 2.1: Construct the perfect matching #####
 
-def randomized_perfect_matching_GeneLS(vertices, rng=None):
+def randomized_perfect_matching_GeneCS(vertices, rng=None):
     """
     vertices: list of graph nodes (must have even length)
     rng: random.Random instance (optional) for reproducibility
@@ -56,7 +63,7 @@ def randomized_perfect_matching_GeneLS(vertices, rng=None):
     rng.shuffle(vs)              # uniform random permutation
     return [(vs[i], vs[i+1]) for i in range(0, len(vs), 2)]
 
-def construct_perfect_matching_GeneLS(G, qubit_to_vertex, logical_op, h, rng=None):
+def construct_perfect_matching_GeneCS(G, qubit_to_vertex, logical_op, h, rng=None):
     """
     Construct a perfect matching from the logical operator.
     Parameters
@@ -97,7 +104,7 @@ def construct_perfect_matching_GeneLS(G, qubit_to_vertex, logical_op, h, rng=Non
         vertices = [qubit_to_vertex[q] for q in qubits_]
 
         # 2. perfect matching on these vertices
-        edges = randomized_perfect_matching_GeneLS(vertices)
+        edges = randomized_perfect_matching_GeneCS(vertices)
 
         perfect_matchings[s] = edges
 
@@ -109,7 +116,7 @@ def construct_perfect_matching_GeneLS(G, qubit_to_vertex, logical_op, h, rng=Non
 
 ##### Step 2.2: Add expander graph #####
 
-def add_edge_GeneLS(G, target_degree, rng=None, edge_key="exp"):
+def add_edge_GeneCS(G, target_degree, rng=None, edge_key="exp"):
     """
     Try to add exactly ONE edge for a FIXED target_degree.
     If impossible under current constraints, return (G, None).
@@ -181,7 +188,7 @@ def add_edge_GeneLS(G, target_degree, rng=None, edge_key="exp"):
     # no deficits at all for this target_degree -> nothing to do in this round
     return G, None
 
-def build_expander_GeneLS(
+def build_expander_GeneCS(
     G0,
     cheeger_threshold,
     seed=0,
@@ -215,7 +222,7 @@ def build_expander_GeneLS(
         if verbose:
             print(f"[step {step}] target_degree={target_degree}, cheeger_lb={current_lb}")
 
-        G, result = add_edge_GeneLS(G, target_degree, rng=rng, edge_key=edge_key)
+        G, result = add_edge_GeneCS(G, target_degree, rng=rng, edge_key=edge_key)
 
         # ---- key change: if no edge can be added for this target_degree,
         #      we end this round and increase the target_degree ----
@@ -248,7 +255,7 @@ def build_expander_GeneLS(
 
     return G, history
 
-def build_expander_sweep_GeneLS(
+def build_expander_sweep_GeneCS(
     G0,
     cheeger_threshold,
     seeds_num,
@@ -293,7 +300,7 @@ def build_expander_sweep_GeneLS(
         # IMPORTANT: always start from a fresh copy
         G = G0.copy()
 
-        G_final, history = build_expander_GeneLS(
+        G_final, history = build_expander_GeneCS(
             G,
             cheeger_threshold=cheeger_threshold,
             seed=seed,
@@ -324,7 +331,7 @@ def build_expander_sweep_GeneLS(
 
 ##### Step 3: Calculating the cycle basis and their partition #####
 
-def _as_multigraph_GeneLS(G):
+def _as_multigraph_GeneCS(G):
     """Ensure MultiGraph and copy (so we can mutate safely)."""
     if isinstance(G, (nx.MultiGraph, nx.MultiDiGraph)):
         return G.copy()
@@ -332,21 +339,21 @@ def _as_multigraph_GeneLS(G):
     return nx.MultiGraph(G)
 
 
-def _find_degree_one_vertex_GeneLS(G):
+def _find_degree_one_vertex_GeneCS(G):
     for v, deg in G.degree():
         if deg == 1:
             return v
     return None
 
 
-def _find_degree_two_vertex_GeneLS(G):
+def _find_degree_two_vertex_GeneCS(G):
     for v, deg in G.degree():
         if deg == 2:
             return v
     return None
 
 
-def _find_self_loop_edge_at_GeneLS(G, v):
+def _find_self_loop_edge_at_GeneCS(G, v):
     # Returns (u,v,key) where u==v
     for u, w, k in G.edges(v, keys=True):
         if u == w == v:
@@ -354,7 +361,7 @@ def _find_self_loop_edge_at_GeneLS(G, v):
     return None
 
 
-def _incident_edges_excluding_loops_GeneLS(G, v):
+def _incident_edges_excluding_loops_GeneCS(G, v):
     # Return list of (u,w,key) with v incident, excluding self-loop at v
     edges = []
     for u, w, k in G.edges(v, keys=True):
@@ -364,11 +371,11 @@ def _incident_edges_excluding_loops_GeneLS(G, v):
     return edges
 
 
-def _other_endpoint_GeneLS(edge, v):
+def _other_endpoint_GeneCS(edge, v):
     u, w, k = edge
     return w if u == v else u
 
-def _vertex_load_GeneLS(G, v, edge_load):
+def _vertex_load_GeneCS(G, v, edge_load):
     inc = list(G.edges(v, keys=True))
     if not inc:
         return 0.0
@@ -377,18 +384,18 @@ def _vertex_load_GeneLS(G, v, edge_load):
         s += edge_load.get(canon_edge(a, b, k), 0)
     return s / len(inc)
 
-def _max_load_vertex_GeneLS(G, edge_load, rng):
+def _max_load_vertex_GeneCS(G, edge_load, rng):
     best_v = None
     best_L = None
     for v in G.nodes():
-        L = _vertex_load_GeneLS(G, v, edge_load)
+        L = _vertex_load_GeneCS(G, v, edge_load)
         if best_v is None or L > best_L:
             best_v, best_L = v, L
         elif L == best_L and rng.random() < 0.5:
             best_v = v
     return best_v
 
-def _find_short_cycle_multigraph_GeneLS(G, max_len, rng, edge_load):
+def _find_short_cycle_multigraph_GeneCS(G, max_len, rng, edge_load):
     """
     Find a simple cycle as list of edges (u,v,key).
     Priority:
@@ -411,7 +418,7 @@ def _find_short_cycle_multigraph_GeneLS(G, max_len, rng, edge_load):
             return [(u, v, keys[0]), (u, v, keys[1])]
 
     # 3) BFS short cycle in underlying graph
-    start = _max_load_vertex_GeneLS(G, edge_load, rng)
+    start = _max_load_vertex_GeneCS(G, edge_load, rng)
 
     # We'll run BFS from a few starts (often 1 is enough)
     for start in [start]:
@@ -525,7 +532,7 @@ def _find_short_cycle_multigraph_GeneLS(G, max_len, rng, edge_load):
     raise RuntimeError("Failed to find a short cycle; graph might be tiny/degenerate.")
 
 
-def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
+def weakly_fundamental_cycle_basis_GeneCS(G_input, rng=None):
     """
     Freedman–Hastings Algorithm A (randomized).
     Input: any graph (can be MultiGraph w/ self-loops + multi-edges).
@@ -538,7 +545,7 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
             edge_load[eid] = edge_load.get(eid, 0) + 1
 
     rng = rng or random.Random()
-    G = _as_multigraph_GeneLS(G_input)
+    G = _as_multigraph_GeneCS(G_input)
 
     virt_id = count(0)               # unique IDs for virtual edges
     virt_map = {}                    # virt_key -> (e1, e2) in original graph for expansion
@@ -547,13 +554,13 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
     for u, v, k in G.edges(keys=True):
         edge_load[canon_edge(u, v, k)] = 0
 
-    def expand_cycle_edges_GeneLS(cycle_edges):
+    def expand_cycle_edges_GeneCS(cycle_edges):
         """Replace any virtual edge by its original 2-edge path, recursively if needed."""
         out = []
         for (u, v, k) in cycle_edges:
             if isinstance(k, tuple) and k and k[0] == "virt" and k in virt_map:
                 e1, e2 = virt_map[k]
-                out.extend(expand_cycle_edges_GeneLS([e1, e2]))
+                out.extend(expand_cycle_edges_GeneCS([e1, e2]))
             else:
                 out.append((u, v, k))
         return out
@@ -566,7 +573,7 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
         # print("in the A function")
 
         # 1) degree-1 vertex
-        v1 = _find_degree_one_vertex_GeneLS(Gcur)
+        v1 = _find_degree_one_vertex_GeneCS(Gcur)
         if v1 is not None:
             # print("Found degree-1 vertex:", v1)
             Gnext = Gcur.copy()
@@ -574,10 +581,10 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
             return A(Gnext)
 
         # 2) degree-2 vertex
-        v2 = _find_degree_two_vertex_GeneLS(Gcur)
+        v2 = _find_degree_two_vertex_GeneCS(Gcur)
         if v2 is not None:
             # print("Found degree-2 vertex:", v2)
-            loop = _find_self_loop_edge_at_GeneLS(Gcur, v2)
+            loop = _find_self_loop_edge_at_GeneCS(Gcur, v2)
             if loop is not None:
                 # Case A: self-loop at v2
                 # print("Found self-loop at degree-2 vertex:", loop)
@@ -588,13 +595,13 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
                 return [ [loop] ] + A(Gnext)
 
             # Case B: contract v2 with its two incident (non-loop) edges
-            inc = _incident_edges_excluding_loops_GeneLS(Gcur, v2)
+            inc = _incident_edges_excluding_loops_GeneCS(Gcur, v2)
             if len(inc) != 2:
                 raise RuntimeError(f"degree-2 vertex {v2} did not have exactly 2 non-loop incidences")
 
             e1, e2 = inc[0], inc[1]
-            x = _other_endpoint_GeneLS(e1, v2)
-            y = _other_endpoint_GeneLS(e2, v2)
+            x = _other_endpoint_GeneCS(e1, v2)
+            y = _other_endpoint_GeneCS(e2, v2)
 
             Gnext = Gcur.copy()
             # remove v2 (and its edges)
@@ -617,7 +624,7 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
             # expand virtual edges in returned cycles
             basis_expanded = []
             for cyc in basis:
-                basis_expanded.append(expand_cycle_edges_GeneLS(cyc))
+                basis_expanded.append(expand_cycle_edges_GeneCS(cyc))
             return basis_expanded
 
         # print("All vertices have degree >= 3, finding short cycle...")
@@ -625,7 +632,7 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
         V = max(Gcur.number_of_nodes(), 2)
         max_len = 2 * math.ceil(math.log2(V)) + 1
 
-        C = _find_short_cycle_multigraph_GeneLS(Gcur, max_len=max_len, rng=rng, edge_load=edge_load)
+        C = _find_short_cycle_multigraph_GeneCS(Gcur, max_len=max_len, rng=rng, edge_load=edge_load)
         _add_cycle_load(C)
         e = max(C, key=lambda ee: edge_load.get(canon_edge(*ee), 0))
 
@@ -642,7 +649,7 @@ def weakly_fundamental_cycle_basis_GeneLS(G_input, rng=None):
     # run
     return A(G)
 
-def edge_load_GeneLS(cycle_basis):
+def edge_load_GeneCS(cycle_basis):
     """
     cycle_basis: List[List[Edge]]
     Edge: (u, v, label)
@@ -655,42 +662,7 @@ def edge_load_GeneLS(cycle_basis):
 
     return dict(load)
 
-# def spanning_forest_GeneLS(G_base, cycle_basis):
-#     """
-#     G_base: networkx.MultiGraph or MultiDiGraph
-#     cycle_basis: List[List[(u, v, key)]]
-#     """
-
-#     # 1. copy graph
-#     G_forest = copy.deepcopy(G_base)
-
-#     # 2. compute load
-#     load = defaultdict(int)
-#     for cycle in cycle_basis:
-#         for edge in cycle:
-#             load[edge] += 1
-
-#     # 3. process each cycle
-#     for cycle in cycle_basis:
-#         # candidate edges: in this cycle AND still in G_forest
-#         candidates = []
-#         for (u, v, k) in cycle:
-#             if G_forest.has_edge(u, v, k):
-#                 candidates.append((u, v, k))
-
-#         if not candidates:
-#             continue
-
-#         # pick edge with maximum load
-#         edge_to_remove = max(candidates, key=lambda e: load[e])
-
-#         # remove it
-#         u, v, k = edge_to_remove
-#         G_forest.remove_edge(u, v, k)
-
-#     return G_forest
-
-def spanning_forest_GeneLS(G_base, cycle_basis):
+def spanning_forest_GeneCS(G_base, cycle_basis):
     """
     G_base: networkx.MultiGraph or MultiDiGraph
     cycle_basis: List[List[(u, v, key)]]
@@ -738,7 +710,7 @@ def spanning_forest_GeneLS(G_base, cycle_basis):
 
     return G_forest
 
-def dynamic_cycle_basis_GeneLS(
+def dynamic_cycle_basis_GeneCS(
     B,
     T,
     e,
@@ -773,7 +745,6 @@ def dynamic_cycle_basis_GeneLS(
 
     # Case 1: u and v are NOT connected in T
     if not nx.has_path(T, u, v):
-        print("not connect")
         T.add_edge(u, v, key=k)
         # ensure edge has load 0
         eid = canon_edge(u, v, k)
@@ -819,7 +790,7 @@ def dynamic_cycle_basis_GeneLS(
     return B_new, T, edge_load
 
 # static cycle basis partition function
-def static_partition_GeneLS(cycle_basis, max_edge_degree=1):
+def static_partition_GeneCS(cycle_basis, max_edge_degree=1):
     """
     Partition cycles into groups.
 
@@ -880,7 +851,7 @@ def static_partition_GeneLS(cycle_basis, max_edge_degree=1):
 
     return groups, group_edge_loads
 
-def dynamic_partition_GeneLS(
+def dynamic_partition_GeneCS(
     cycle_basis,
     groups,
     group_edge_loads,
@@ -987,7 +958,7 @@ def bfs_spanning_tree(G, root=None):
 
     return T
 
-def congestion_aware_expander_GeneLS(
+def congestion_aware_expander_GeneCS(
     G0,
     seed=0,
     edge_key="exp",
@@ -1005,17 +976,19 @@ def congestion_aware_expander_GeneLS(
     n = G.number_of_nodes()
     max_target_degree = n - 1
 
+    eps = 1e-5
+    cheeger_lb = max(cheeger_lower_bound(G), eps)
     # calculate the layer need to boost Cheeger constant after perfect matching
-    layer_Cheeger = math.ceil(1 / cheeger_lower_bound(G))
+    layer_Cheeger = math.ceil(1 / cheeger_lb)
 
     # calculate the layer need to decongest cycles after perfect matching
-    cycle_basis = weakly_fundamental_cycle_basis_GeneLS(G, rng)
+    cycle_basis = weakly_fundamental_cycle_basis_GeneCS(G, rng)
     cycle_origin = len(cycle_basis)
-    # G_forest = spanning_forest_GeneLS(G, cycle_basis)
+    # G_forest = spanning_forest_GeneCS(G, cycle_basis)
     G_forest = bfs_spanning_tree(G)
     is_conn = nx.is_connected(G_forest)
-    edge_load = edge_load_GeneLS(cycle_basis)
-    groups, group_edge_loads = static_partition_GeneLS(cycle_basis, max_edge_degree=max_edge_degree)
+    edge_load = edge_load_GeneCS(cycle_basis)
+    groups, group_edge_loads = static_partition_GeneCS(cycle_basis, max_edge_degree=max_edge_degree)
     layer_cycle = len(groups)
 
     # initialize target degree
@@ -1037,7 +1010,7 @@ def congestion_aware_expander_GeneLS(
         if step > 0 and step % 50 == 0:
             G_forest = bfs_spanning_tree(G)
 
-        G, result = add_edge_GeneLS(G, target_degree, rng=rng, edge_key=edge_key)
+        G, result = add_edge_GeneCS(G, target_degree, rng=rng, edge_key=edge_key)
         
         # ---- key change: if no edge can be added for this target_degree,
         #      we end this round and increase the target_degree ----
@@ -1058,10 +1031,12 @@ def congestion_aware_expander_GeneLS(
 
         step += 1
         
-        layer_Cheeger = math.ceil(1 / cheeger_lower_bound(G))
+        eps = 1e-5
+        cheeger_lb = max(cheeger_lower_bound(G), eps)
+        layer_Cheeger = math.ceil(1 / cheeger_lb)
 
-        cycle_basis, G_forest, edge_load = dynamic_cycle_basis_GeneLS(cycle_basis, G_forest, result, edge_load)
-        groups, group_edge_loads = dynamic_partition_GeneLS(cycle_basis, groups, group_edge_loads, max_edge_degree=max_edge_degree)
+        cycle_basis, G_forest, edge_load = dynamic_cycle_basis_GeneCS(cycle_basis, G_forest, result, edge_load)
+        groups, group_edge_loads = dynamic_partition_GeneCS(cycle_basis, groups, group_edge_loads, max_edge_degree=max_edge_degree)
         layer_cycle = len(groups)
 
         history.append({
@@ -1078,7 +1053,7 @@ def congestion_aware_expander_GeneLS(
 
     return G, history, cycle_basis, groups, max_load
 
-# def congestion_aware_expander_GeneLS_v0(
+# def congestion_aware_expander_GeneCS_alt(
 #     G0,
 #     seed=0,
 #     edge_key="exp",
@@ -1100,12 +1075,12 @@ def congestion_aware_expander_GeneLS(
 #     layer_Cheeger = math.ceil(1 / cheeger_lower_bound(G))
 
 #     # calculate the layer need to decongest cycles after perfect matching
-#     cycle_basis = weakly_fundamental_cycle_basis_GeneLS(G, rng)
+#     cycle_basis = weakly_fundamental_cycle_basis_GeneCS(G, rng)
 #     cycle_origin = len(cycle_basis)
-#     G_forest = spanning_forest_GeneLS(G, cycle_basis)
+#     G_forest = spanning_forest_GeneCS(G, cycle_basis)
 #     is_conn = nx.is_connected(G_forest)
-#     edge_load = edge_load_GeneLS(cycle_basis)
-#     groups, group_edge_loads = static_partition_GeneLS(cycle_basis, max_edge_degree=max_edge_degree)
+#     edge_load = edge_load_GeneCS(cycle_basis)
+#     groups, group_edge_loads = static_partition_GeneCS(cycle_basis, max_edge_degree=max_edge_degree)
 #     layer_cycle = len(groups)
 
 #     # initialize target degree
@@ -1122,94 +1097,7 @@ def congestion_aware_expander_GeneLS(
 #         if verbose:
 #             print(f"[step {step}], layer_cycle={layer_cycle}, layer_Cheeger={layer_Cheeger}")
 
-#         G, result = add_edge_GeneLS(G, target_degree, rng=rng, edge_key=edge_key)
-        
-#         # ---- key change: if no edge can be added for this target_degree,
-#         #      we end this round and increase the target_degree ----
-#         if result is None:
-#             if target_degree >= max_target_degree:
-#                 # cannot increase target_degree any further in a simple graph
-#                 if verbose:
-#                     print(
-#                         f"[stop] target_degree reached max {max_target_degree}, "
-#                         "no more edges possible."
-#                     )
-#                 break
-
-#             target_degree += 1
-#             continue
-
-#         u, v, key = result
-
-#         step += 1
-        
-#         layer_Cheeger = math.ceil(1 / cheeger_lower_bound(G))
-
-#         # cycle_pre_num = len(cycle_basis)
-#         cycle_basis, G_forest, edge_load = dynamic_cycle_basis_GeneLS(cycle_basis, G_forest, result, edge_load)
-#         # cycle_post_num = len(cycle_basis)
-#         groups, group_edge_loads = dynamic_partition_GeneLS(cycle_basis, groups, group_edge_loads, max_edge_degree=max_edge_degree)
-#         layer_cycle = len(groups)
-
-#         history.append({
-#             "step": step,
-#             "u": u,
-#             "v": v,
-#             "edge_key": key,
-#             "target_degree": target_degree,
-#             "layer_cycle": layer_cycle,
-#             "layer_Cheeger": layer_Cheeger,
-#         })
-
-#     max_load = max(max(d.values()) for d in group_edge_loads)
-
-#     return G, history, cycle_basis, groups, max_load
-
-# def congestion_aware_expander_GeneLS_naive(
-#     G0,
-#     seed=0,
-#     edge_key="exp",
-#     start_from="max",   # "max" or "minplus"
-#     max_edge_degree=1,   # for cycle partitioning
-#     verbose=False,
-# ):
-#     """
-#     G0 is NOT modified.
-#     """
-#     G = G0.copy()
-#     rng = random.Random(seed)
-#     history = []
-#     step = 0
-#     n = G.number_of_nodes()
-#     max_target_degree = n - 1
-
-#     # calculate the layer need to boost Cheeger constant after perfect matching
-#     layer_Cheeger = math.ceil(1 / cheeger_lower_bound(G))
-
-#     # calculate the layer need to decongest cycles after perfect matching
-#     cycle_basis = weakly_fundamental_cycle_basis_GeneLS(G, rng)
-#     cycle_origin = len(cycle_basis)
-#     G_forest = spanning_forest_GeneLS(G, cycle_basis)
-#     is_conn = nx.is_connected(G_forest)
-#     edge_load = edge_load_GeneLS(cycle_basis)
-#     groups, group_edge_loads = static_partition_GeneLS(cycle_basis, max_edge_degree=max_edge_degree)
-#     layer_cycle = len(groups)
-
-#     # initialize target degree
-#     degs = dict(G.degree())
-#     if start_from == "max":
-#         target_degree = max(degs.values())
-#     elif start_from == "minplus":
-#         target_degree = min(degs.values()) + 1
-#     else:
-#         raise ValueError("start_from must be 'max' or 'minplus'.")
-
-#     while layer_cycle < layer_Cheeger:
-
-#         if verbose:
-#             print(f"[step {step}], layer_cycle={layer_cycle}, layer_Cheeger={layer_Cheeger}")
-
-#         G, result = add_edge_GeneLS(G, target_degree, rng=rng, edge_key=edge_key)
+#         G, result = add_edge_GeneCS(G, target_degree, rng=rng, edge_key=edge_key)
         
 #         # ---- key change: if no edge can be added for this target_degree,
 #         #      we end this round and increase the target_degree ----
@@ -1233,8 +1121,8 @@ def congestion_aware_expander_GeneLS(
         
 #         layer_Cheeger = math.ceil(1 / cheeger_lower_bound(G))
 
-#         cycle_basis = weakly_fundamental_cycle_basis_GeneLS(G, rng)
-#         groups, group_edge_loads = static_partition_GeneLS(cycle_basis, max_edge_degree=max_edge_degree)
+#         cycle_basis = weakly_fundamental_cycle_basis_GeneCS(G, rng)
+#         groups, group_edge_loads = static_partition_GeneCS(cycle_basis, max_edge_degree=max_edge_degree)
 #         layer_cycle = len(groups)
 
 #         history.append({
@@ -1251,7 +1139,7 @@ def congestion_aware_expander_GeneLS(
 
 #     return G, history, cycle_basis, groups, max_load
 
-def congestion_aware_expander_sweep_GeneLS(
+def congestion_aware_expander_sweep_GeneCS(
     G0,
     seeds_num,
     edge_key="exp",
@@ -1300,7 +1188,10 @@ def congestion_aware_expander_sweep_GeneLS(
         # IMPORTANT: always start from a fresh copy
         G = G0.copy()
 
-        G_base, history, cycle_basis, groups, max_load = congestion_aware_expander_GeneLS(G, seed=seed, edge_key=edge_key, start_from="max", max_edge_degree=max_edge_degree)
+        try:
+            G_base, history, cycle_basis, groups, max_load = congestion_aware_expander_GeneCS(G, seed=seed, edge_key=edge_key, start_from="max", max_edge_degree=max_edge_degree)
+        except Exception:
+            continue
         layers = max(math.ceil(1 / cheeger_lower_bound(G_base)), len(groups))
 
         num_edges = len(history)
@@ -1384,7 +1275,7 @@ def thicken_graph(G_base: nx.MultiGraph, L: int):
 
 ##### Step 5: Cellulation #####
 
-def reorder_edge_cycle_GeneLS(edge_cycle):
+def reorder_edge_cycle_GeneCS(edge_cycle):
     """
     Reorder an unordered list of edges (u,v,key)
     that form a simple cycle into traversal order.
@@ -1437,7 +1328,7 @@ def reorder_edge_cycle_GeneLS(edge_cycle):
 
     return ordered
 
-def edge_cycle_to_vertex_cycle_GeneLS(ordered_edge_cycle):
+def edge_cycle_to_vertex_cycle_GeneCS(ordered_edge_cycle):
     """
     Convert an ordered edge-cycle into an ordered vertex list.
     """
@@ -1459,7 +1350,7 @@ def edge_cycle_to_vertex_cycle_GeneLS(ordered_edge_cycle):
 
     return verts
 
-def cellulation_edges_from_vertex_cycle_GeneLS(vertex_cycle):
+def cellulation_edges_from_vertex_cycle_GeneCS(vertex_cycle):
     """
     Given an ordered vertex cycle [v0, v1, ..., v_{N-1}],
     generate cellulation edges according to:
@@ -1484,7 +1375,7 @@ def cellulation_edges_from_vertex_cycle_GeneLS(vertex_cycle):
 
     return edges
 
-def cellulation_triangle_indices_GeneLS(N):
+def cellulation_triangle_indices_GeneCS(N):
     """
     Return triangle cycles (as index triples) induced by the cellulation rule:
       diagonals: (1,N-1), (N-1,2), (2,N-2), (N-2,3), ...
@@ -1524,17 +1415,17 @@ def cellulation_triangle_indices_GeneLS(N):
 
     return tris
 
-def lift_node_GeneLS(u, l):
+def lift_node_GeneCS(u, l):
     return u if l == 0 else f"{u}_{l}"
 
-def find_edge_key_GeneLS(G, u, v):
+def find_edge_key_GeneCS(G, u, v):
     """
     Given endpoints u, v in a MultiGraph G,
     return the key of ANY edge between u and v.
     """
     return next(iter(G[u][v].keys()))
 
-def find_edge_triangle_GeneLS(cycle_list, triangle, l, idx):
+def find_edge_triangle_GeneCS(cycle_list, triangle, l, idx):
     """
     cycle_list: list of (u, v, key), undirected
     triangle: (A, B, C)
@@ -1560,14 +1451,14 @@ def find_edge_triangle_GeneLS(cycle_list, triangle, l, idx):
         if e is not None:
             u, v, k = e
             k_l = k if l == 0 else (k, l)
-            result.append((lift_node_GeneLS(u, l), lift_node_GeneLS(v, l), k_l))
+            result.append((lift_node_GeneCS(u, l), lift_node_GeneCS(v, l), k_l))
         else:
             # the missing edge is in cellulation
-            result.append((lift_node_GeneLS(u, l), lift_node_GeneLS(v, l), f"cellulation_{l}_{idx}"))
+            result.append((lift_node_GeneCS(u, l), lift_node_GeneCS(v, l), f"cellulation_{l}_{idx}"))
 
     return result
 
-def split_list_GeneLS(input_list, d):
+def split_list_GeneCS(input_list, d):
     """
     Split a list using a repeating pattern:
     - Take d elements → put into second_list
@@ -1595,31 +1486,31 @@ def split_list_GeneLS(input_list, d):
 
     return first_list, second_list
 
-def normalize_edge_GeneLS(u, v):
+def normalize_edge_GeneCS(u, v):
     """Make edge direction-independent"""
     return tuple(sorted((u, v)))
 
 
-def merge_triangles_by_redundant_edges_GeneLS(tri_cycles, redundant_edges, l):
+def merge_triangles_by_redundant_edges_GeneCS(tri_cycles, redundant_edges, l):
     """
     Merge triangles if they share redundant edges.
     """
     lifted_redundant = []
     for u, v in redundant_edges:
-        u_l = lift_node_GeneLS(u, l)
-        v_l = lift_node_GeneLS(v, l)
+        u_l = lift_node_GeneCS(u, l)
+        v_l = lift_node_GeneCS(v, l)
         lifted_redundant.append((u_l, v_l))
 
 
     # Normalize redundant edges
-    redundant_set = set(normalize_edge_GeneLS(u, v) for u, v in lifted_redundant)
+    redundant_set = set(normalize_edge_GeneCS(u, v) for u, v in lifted_redundant)
 
     # Map edge -> triangles containing it
     edge_to_triangles = defaultdict(list)
 
     for i, tri in enumerate(tri_cycles):
         for (u, v, _) in tri:
-            edge_to_triangles[normalize_edge_GeneLS(u, v)].append(i)
+            edge_to_triangles[normalize_edge_GeneCS(u, v)].append(i)
 
     # Build adjacency between triangles
     adjacency = defaultdict(set)
@@ -1662,7 +1553,7 @@ def merge_triangles_by_redundant_edges_GeneLS(tri_cycles, redundant_edges, l):
         for tri_index in component:
             for edge in tri_cycles[tri_index]:
                 u, v, label = edge
-                key = normalize_edge_GeneLS(u, v)
+                key = normalize_edge_GeneCS(u, v)
                 edge_count[(key, label)] += 1
 
         # Keep edges that appear only once
@@ -1676,7 +1567,7 @@ def merge_triangles_by_redundant_edges_GeneLS(tri_cycles, redundant_edges, l):
 
     return merged_polygons
 
-def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
+def cellulation_GeneCS(G_thick, cycle_groups, cycle_basis, d=3):
     """
     For each layer l and each cycle in that layer:
       - reorder edge-cycle
@@ -1695,16 +1586,16 @@ def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
             # print(f"Processing layer {l}, cycle {edge_cycle}")
 
             # 1. reorder edges
-            ordered_edges = reorder_edge_cycle_GeneLS(edge_cycle)
+            ordered_edges = reorder_edge_cycle_GeneCS(edge_cycle)
             # print("ordered edges", ordered_edges)
 
             # 2. edges -> vertices
-            vertex_cycle = edge_cycle_to_vertex_cycle_GeneLS(ordered_edges)
+            vertex_cycle = edge_cycle_to_vertex_cycle_GeneCS(ordered_edges)
             # print("vertex cycle", vertex_cycle)
 
             # 3. generate cellulation edges
-            cell_edges = cellulation_edges_from_vertex_cycle_GeneLS(vertex_cycle)
-            cell_edges, redundant_edges = split_list_GeneLS(cell_edges, d-3)
+            cell_edges = cellulation_edges_from_vertex_cycle_GeneCS(vertex_cycle)
+            cell_edges, redundant_edges = split_list_GeneCS(cell_edges, d-3)
 
 
             # -------------------------------
@@ -1713,8 +1604,8 @@ def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
             if not cell_edges:
                 lifted_cycle = []
                 for u, v, k in ordered_edges:
-                    u_l = lift_node_GeneLS(u, l)
-                    v_l = lift_node_GeneLS(v, l)
+                    u_l = lift_node_GeneCS(u, l)
+                    v_l = lift_node_GeneCS(v, l)
                     if l == 0:
                         k_l = k
                     else:
@@ -1730,8 +1621,8 @@ def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
             # (i) add cellulation edges to graph
             for u, v in cell_edges:
                 count += 1
-                u_l = lift_node_GeneLS(u, l)
-                v_l = lift_node_GeneLS(v, l)
+                u_l = lift_node_GeneCS(u, l)
+                v_l = lift_node_GeneCS(v, l)
 
                 # allow parallel edges; key is fixed string
                 G_thick.add_edge(u_l, v_l, key=f"cellulation_{l}_{idx}")
@@ -1743,7 +1634,7 @@ def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
             # Reconstruct triangles explicitly
             # The polygon is vertex_cycle = [v0, v1, ..., v_{N-1}]
             poly = list(vertex_cycle)
-            idx_triangles = cellulation_triangle_indices_GeneLS(len(poly))
+            idx_triangles = cellulation_triangle_indices_GeneCS(len(poly))
 
             new_cycle_temp = []
 
@@ -1756,10 +1647,10 @@ def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
                 c = poly[k]
                 triangle = (a, b, c)
 
-                tri_cycle = find_edge_triangle_GeneLS(ordered_edges, triangle, l, idx)
+                tri_cycle = find_edge_triangle_GeneCS(ordered_edges, triangle, l, idx)
                 new_cycle_temp.append(tri_cycle)
 
-            merged_polygons = merge_triangles_by_redundant_edges_GeneLS(new_cycle_temp, redundant_edges, l)
+            merged_polygons = merge_triangles_by_redundant_edges_GeneCS(new_cycle_temp, redundant_edges, l)
             new_cycle_basis = new_cycle_basis + merged_polygons
 
     # print("number of edges added:", count)
@@ -1767,7 +1658,7 @@ def cellulation_GeneLS(G_thick, cycle_groups, cycle_basis, d=3):
     return new_cycle_basis
 
 
-def add_interlayer_rectangle_cycles_GeneLS(
+def add_interlayer_rectangle_cycles_GeneCS(
     G_thick,
     G_base,
     L,
@@ -1804,8 +1695,8 @@ def add_interlayer_rectangle_cycles_GeneLS(
             v_lp = f"{v}_{l+1}"
 
             # find keys for the 4 edges
-            k_v_vert = find_edge_key_GeneLS(G_thick, v_l, v_lp)
-            k_u_vert = find_edge_key_GeneLS(G_thick, u_lp, u_l)
+            k_v_vert = find_edge_key_GeneCS(G_thick, v_l, v_lp)
+            k_u_vert = find_edge_key_GeneCS(G_thick, u_lp, u_l)
 
             k_l = k if l == 0 else (k, l)
 
@@ -1817,3 +1708,185 @@ def add_interlayer_rectangle_cycles_GeneLS(
             ]
 
             new_cycle_basis.append(rectangle_cycle)
+
+    return new_cycle_basis
+
+##### Main Synthesis Function #####
+
+def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, check_degree, sample_num, benchmark_path= './benchmark', saving_path = './bin'):
+
+    t0 = time.time()
+    # load the code
+    with open(f"{benchmark_path}/{file_name}.pkl", "rb") as f:
+        data = pickle.load(f)
+
+    check_dir_list = ["deform_data", "deform_code", "deform_graph"]
+    for dir_ in check_dir_list:
+        check_dir = os.path.join(saving_path, dir_)
+        if not os.path.exists(check_dir):
+            os.makedirs(check_dir)
+
+    output_path = saving_path + '/' + 'deform_data' + '/' + f'{file_name}_full_{logical_type}_{logical_idx}' + '.txt'
+    output_file = open(file=output_path, mode="a", encoding='utf-8')
+
+    qcode = data["qcode"]
+
+    with open(output_path, "w") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            print("Testing original code...")
+            qcode.test()
+            print("\n")
+
+    lz = qcode.lz; lx = qcode.lx
+    hz = qcode.hz.toarray(); hx = qcode.hx.toarray()
+    k = lz.shape[0]; n = lz.shape[1]
+
+    # if logical_type == "Z":
+    #     logical_op = lz[logical_idx,:]
+    #     other_h = hx
+    # elif logical_type == "X":
+    #     logical_op = lx[logical_idx,:]
+    #     print(logical_op)
+    #     print(type(logical_op))
+    #     other_h = hz
+
+    if logical_type == "Z":
+        logical_op = lz[logical_idx[0], :].copy()
+        other_h = hx
+    elif logical_type == "X":
+        logical_op = lx[logical_idx[0], :].copy()
+        other_h = hz
+
+    for idx in logical_idx[1:]:
+        if logical_type == "Z":
+            logical_op = logical_op + lz[idx, :]
+        else:
+            logical_op = logical_op + lx[idx, :]
+
+    logical_op.data %= 2
+    logical_op.eliminate_zeros()
+
+    # Step 1: Construct vertex of graph and the bijection fuction
+    G, qubit_to_vertex = create_graph_GeneCS(logical_op)
+
+    # Step 2: Construct the perfect matching
+    G, perfect_matchings = construct_perfect_matching_GeneCS(G, qubit_to_vertex, logical_op, other_h)
+
+    # Step 3: Congestion-aware expansion of graph
+    # 2 reserved for vertex checks, 2 reserved for perfect matching or thickening per edge
+    G_base, _, cycle_basis, groups = congestion_aware_expander_sweep_GeneCS(G, sample_num, edge_key="exp", max_edge_degree=qubit_degree-4)
+
+    # Step 4: Thickening
+    beta = cheeger_lower_bound(G_base)
+    if abs(1 - beta) < 1e-6:
+        beta = 1.0
+    L = max(math.ceil(1 / beta), len(groups))
+    print("Thickening layer =", L, file=output_file)
+    print(f"Redundancy = {(L - min(math.ceil(1 / beta), len(groups))) / L * 100:.1f} %", file=output_file)
+    G_thick = thicken_graph(G_base, L)
+
+    # Step 5: Cellulation
+    new_cycle_basis = cellulation_GeneCS(G_thick, groups, cycle_basis, d=check_degree)
+    new_cycle_basis = add_interlayer_rectangle_cycles_GeneCS(G_thick, G_base, L, new_cycle_basis)
+
+    print("\n", file=output_file)
+    new_qubit_num = G_thick.number_of_edges()
+    new_check_num = len(new_cycle_basis) + G_thick.number_of_nodes()
+    print("Number of new qubits:", G_thick.number_of_edges())
+    print("Number of new qubits:", G_thick.number_of_edges(), file=output_file)
+    print("Number of new chekcs:", len(new_cycle_basis) + G_thick.number_of_nodes())
+    print("Number of new chekcs:", len(new_cycle_basis) + G_thick.number_of_nodes(), file=output_file)
+
+    data = {
+        "G_thick": G_thick,
+        "perfect_matching": perfect_matchings, 
+        "cycle_basis": new_cycle_basis, 
+        "HX": hx,
+        "HZ": hz,
+        "logical_type": logical_type,
+        "logical_idx": logical_idx,
+        "logical_op": logical_op,
+    }
+
+    with open(f"{saving_path}/deform_graph/{file_name}_full_{logical_type}_{logical_idx}.pkl", "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    ######################## Code Deformation ########################
+
+    # Construct the parity check matrix for derformed code
+    E = G_thick.number_of_edges()
+    hz = enlarge_parity_check(hz, E)
+    hx = enlarge_parity_check(hx, E)
+
+    # add new vertex check
+    if logical_type == "Z":
+        hz, _ = add_vertex_checks(hz, G_thick)
+    elif logical_type == "X":
+        hx, _ = add_vertex_checks(hx, G_thick)
+
+    # modify original check involved in perfect matching 
+    if logical_type == "Z":
+        hx = add_perfect_matching_checks(hx, G_thick, perfect_matchings)
+    elif logical_type == "X":
+        hz = add_perfect_matching_checks(hz, G_thick, perfect_matchings)
+
+    # add cycle checks to fix gauge degrees of freedom
+    if logical_type == "Z":
+        hx = append_cycle_basis_checks(G_thick, hx, new_cycle_basis, hx.shape[1])
+    elif logical_type == "X":
+        hz = append_cycle_basis_checks(G_thick, hz, new_cycle_basis, hz.shape[1])
+
+    t1 = time.time()
+
+    check_degree, qubit_degree = compute_max_degrees(hx, hz)
+    print("\n", file=output_file)
+    print("Max check degree:", check_degree)
+    print("Max check degree:", check_degree, file=output_file)
+    print("Max qubit degree:", qubit_degree)
+    print("Max qubit degree:", qubit_degree, file=output_file)
+
+    print("\n", file=output_file)
+    print("Compilation time:", t1-t0, file=output_file)
+
+    # check logical operator now in stabilizer group
+    if logical_type == "Z":
+        logical_ext = extend_logical(logical_op, E)  
+        print("\n", file=output_file)
+        print("Is measured logical operator in stabilizer group?", is_in_row_space_GF2(hz, logical_ext), file=output_file)
+    elif logical_type == "X":
+        logical_ext = extend_logical(logical_op, E)  
+        print("\n", file=output_file)
+        print("Is measured logical operator in stabilizer group?", is_in_row_space_GF2(hx, logical_ext), file=output_file)
+
+    qcode=css_code(hx,hz)
+    with open(output_path, "a") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            print("Testing deformed code...")
+            qcode.test()
+            print("\n")
+
+    deform_code = {
+        "qcode": qcode,
+    }
+
+    with open(output_path, "a") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            compute_global_distribution(hx, hz)
+            print("\n")
+
+    with open(f"{saving_path}/deform_code/{file_name}_full_{logical_type}_{logical_idx}.pkl", "wb") as f:
+        pickle.dump(deform_code, f)
+
+    # Save selected values as CSV
+    df = pd.DataFrame([{
+        'file_name': file_name,
+        ' qubit_num': new_qubit_num,
+        ' check_num': new_check_num,
+        ' qubit_deg': qubit_degree,
+        ' check_deg': check_degree,
+        ' Comp_time': t1-t0, 
+    }])
+
+    df.to_csv(f'{saving_path}/output.csv', mode='a', header=not pd.io.common.file_exists(f'opt_full.csv'), index=False)
+
+

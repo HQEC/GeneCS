@@ -1,0 +1,4 @@
+file_name, qubit_num, check_num, qubit_deg, check_deg, Comp_time
+BB_144,24,25,7,8,0.8784768581390381
+file_name, qubit_num, check_num, qubit_deg, check_deg, Comp_time
+BB_144,253,254,9,9,9.261025190353394
