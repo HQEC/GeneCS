@@ -1,0 +1,62 @@
+Testing original code...
+<Unnamed CSS code>
+ -Block dimensions: Pass
+ -PCMs commute hz@hx.T==0: Pass
+ -PCMs commute hx@hz.T==0: Pass
+ -lx \in ker{hz} AND lz \in ker{hx}: Pass
+ -lx and lz anticommute: Pass
+ -<Unnamed CSS code> is a valid CSS code w/ params [144,12,nan]
+
+
+Testing deformed code...
+<Unnamed CSS code>
+ -Block dimensions: Pass
+ -PCMs commute hz@hx.T==0: Pass
+ -PCMs commute hx@hz.T==0: Pass
+ -lx \in ker{hz} AND lz \in ker{hx}: Pass
+ -lx and lz anticommute: Pass
+ -<Unnamed CSS code> is a valid CSS code w/ params [168,11,nan]
+
+
+
+========== CSS Code Structure ==========
+
+X-check Weight Distribution:
+  Weight 5: 12 X-checks
+  Weight 6: 72 X-checks
+
+Z-check Weight Distribution:
+  Weight 3: 4 Z-checks
+  Weight 4: 4 Z-checks
+  Weight 5: 2 Z-checks
+  Weight 6: 55 Z-checks
+  Weight 7: 19 Z-checks
+  Weight 8: 1 Z-checks
+
+Qubit Participation Distribution (X + Z combined):
+  3 qubits are involved in 3 total checks
+  2 qubits are involved in 4 total checks
+  10 qubits are involved in 5 total checks
+  137 qubits are involved in 6 total checks
+  16 qubits are involved in 7 total checks
+
+========================================
+
+
+
+Thickening layer = 1
+Redundancy = 0.0 %
+
+
+Number of new qubits: 24
+Number of new chekcs: 25
+
+
+Max check degree: 8
+Max qubit degree: 7
+
+
+Compilation time: 0.8749866485595703
+
+
+Is measured logical operator in stabilizer group? True

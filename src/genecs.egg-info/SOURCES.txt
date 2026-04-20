@@ -1,0 +1,12 @@
+LICENSE
+README.md
+setup.py
+src/genecs/__init__.py
+src/genecs/adapter.py
+src/genecs/deform.py
+src/genecs/fun.py
+src/genecs/utils.py
+src/genecs.egg-info/PKG-INFO
+src/genecs.egg-info/SOURCES.txt
+src/genecs.egg-info/dependency_links.txt
+src/genecs.egg-info/top_level.txt
