@@ -9,6 +9,7 @@ from itertools import count
 import itertools
 from genecs.utils import *
 from genecs.deform import *
+from genecs.adapter import *
 from collections import defaultdict, deque
 from contextlib import redirect_stdout, redirect_stderr
 import pickle
@@ -1726,7 +1727,7 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
         if not os.path.exists(check_dir):
             os.makedirs(check_dir)
 
-    output_path = saving_path + '/' + 'deform_data' + '/' + f'{file_name}_full_{logical_type}_{logical_idx}' + '.txt'
+    output_path = saving_path + '/' + 'deform_data' + '/' + f'{file_name}_{logical_type}_{logical_idx}' + '.txt'
     output_file = open(file=output_path, mode="a", encoding='utf-8')
 
     qcode = data["qcode"]
@@ -1740,15 +1741,6 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
     lz = qcode.lz; lx = qcode.lx
     hz = qcode.hz.toarray(); hx = qcode.hx.toarray()
     k = lz.shape[0]; n = lz.shape[1]
-
-    # if logical_type == "Z":
-    #     logical_op = lz[logical_idx,:]
-    #     other_h = hx
-    # elif logical_type == "X":
-    #     logical_op = lx[logical_idx,:]
-    #     print(logical_op)
-    #     print(type(logical_op))
-    #     other_h = hz
 
     if logical_type == "Z":
         logical_op = lz[logical_idx[0], :].copy()
@@ -1808,7 +1800,7 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
         "logical_op": logical_op,
     }
 
-    with open(f"{saving_path}/deform_graph/{file_name}_full_{logical_type}_{logical_idx}.pkl", "wb") as f:
+    with open(f"{saving_path}/deform_graph/{file_name}_{logical_type}_{logical_idx}.pkl", "wb") as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
     ######################## Code Deformation ########################
@@ -1874,7 +1866,7 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
             compute_global_distribution(hx, hz)
             print("\n")
 
-    with open(f"{saving_path}/deform_code/{file_name}_full_{logical_type}_{logical_idx}.pkl", "wb") as f:
+    with open(f"{saving_path}/deform_code/{file_name}_{logical_type}_{logical_idx}.pkl", "wb") as f:
         pickle.dump(deform_code, f)
 
     # Save selected values as CSV
@@ -1887,6 +1879,299 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
         ' Comp_time': t1-t0, 
     }])
 
-    df.to_csv(f'{saving_path}/output.csv', mode='a', header=not pd.io.common.file_exists(f'opt_full.csv'), index=False)
+    df.to_csv(f'{saving_path}/output.csv', mode='a', header=not pd.io.common.file_exists(f'output.csv'), index=False)
 
 
+def crosscode_synthesis(file_name_1, file_name_2, logical_type_1, logical_type_2, logical_idx_1, logical_idx_2, qubit_degree_1, qubit_degree_2, check_degree_1, check_degree_2, sample_num, adapter_size, benchmark_path= './benchmark', saving_path = './bin'):
+    
+    if logical_type_1 != logical_type_2:
+        print("Error, measuring different type logicals.")
+
+    check_dir_list = ["deform_data", "deform_code", "deform_graph"]
+    for dir_ in check_dir_list:
+        check_dir = os.path.join(saving_path, dir_)
+        if not os.path.exists(check_dir):
+            os.makedirs(check_dir)
+
+    output_path = saving_path + '/' + 'deform_data' + '/' + f'{file_name_1}_{logical_type_1}_{logical_idx_1}_AND_{file_name_2}_{logical_type_2}_{logical_idx_2}' + '.txt'
+    output_file = open(file=output_path, mode="a", encoding='utf-8')
+
+    t0 = time.time()
+    ######################## Construct Ancilla System Graph for the First Code ########################
+
+    # load the code
+    with open(f"{benchmark_path}/{file_name_1}.pkl", "rb") as f:
+        data_1 = pickle.load(f)
+
+    qcode_1 = data_1["qcode"]
+
+    with open(output_path, "w") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            print("Testing original code 1...")
+            qcode_1.test()
+            print("\n")
+
+    lz_1 = qcode_1.lz; lx_1 = qcode_1.lx
+    hz_1 = qcode_1.hz.toarray(); hx_1 = qcode_1.hx.toarray()
+    k = lz_1.shape[0]; n = lz_1.shape[1]
+
+    if logical_type_1 == "Z":
+        logical_op_1 = lz_1[logical_idx_1[0], :].copy()
+        other_h_1 = hx_1
+    elif logical_type_1 == "X":
+        logical_op_1 = lx_1[logical_idx_1[0], :].copy()
+        other_h_1 = hz_1
+
+    for idx in logical_idx_1[1:]:
+        if logical_type_1 == "Z":
+            logical_op_1 = logical_op_1 + lz_1[idx, :]
+        else:
+            logical_op_1 = logical_op_1 + lx_1[idx, :]
+
+    logical_op_1.data %= 2
+    logical_op_1.eliminate_zeros()
+
+    # Step 1: Construct vertex of graph and the bijection fuction
+    G_1, qubit_to_vertex_1 = create_graph_GeneCS(logical_op_1)
+
+    # Step 2: Construct the perfect matching
+    G_1, perfect_matchings_1 = construct_perfect_matching_GeneCS(G_1, qubit_to_vertex_1, logical_op_1, other_h_1)
+
+    # Step 3: Congestion-aware expansion of graph
+    # 2 reserved for vertex checks, 2 reserved for perfect matching or thickening per edge
+    G_base_1, _, cycle_basis_1, groups_1 = congestion_aware_expander_sweep_GeneCS(G_1, sample_num, edge_key="exp", max_edge_degree=qubit_degree_1-4)
+
+    # Step 4: Thickening
+    beta_1 = cheeger_lower_bound(G_base_1)
+    if abs(1 - beta_1) < 1e-6:
+        beta_1 = 1.0
+    L_1 = max(math.ceil(1 / beta_1), len(groups_1))
+    G_thick_1 = thicken_graph(G_base_1, L_1)
+
+    # Step 5: Cellulation
+    new_cycle_basis_1 = cellulation_GeneCS(G_thick_1, groups_1, cycle_basis_1, d=check_degree_1)
+    new_cycle_basis_1 = add_interlayer_rectangle_cycles_GeneCS(G_thick_1, G_base_1, L_1, new_cycle_basis_1)
+
+    data = {
+        "G_thick": G_thick_1,
+        "perfect_matching": perfect_matchings_1, 
+        "cycle_basis": new_cycle_basis_1, 
+        "HX": hx_1,
+        "HZ": hz_1,
+        "logical_type": logical_type_1,
+        "logical_idx": logical_idx_1,
+        "logical_op": logical_op_1,
+    }
+
+    with open(f"{saving_path}/deform_graph/{file_name_1}_merge_{logical_type_1}_{logical_idx_1}.pkl", "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    ######################## Code Deformation for the First Code ########################
+
+    nodes_1, edges_1 = find_d_nodes_tree(G_thick_1, adapter_size)
+    G_tree_1, column_dict_1, row_dict_1 = incidence_matrix(nodes_1, edges_1)
+    T_1,P_1 = skip_tree(G_tree_1)
+
+    # Construct the parity check matrix for derformed code
+    E_1 = G_thick_1.number_of_edges()
+    n_1_ori = hz_1.shape[1]
+    hz_1 = enlarge_parity_check(hz_1, E_1)
+    hx_1 = enlarge_parity_check(hx_1, E_1)
+
+    # add new vertex check
+    if logical_type_1 == "Z":
+        hz_1, vertex2check_1 = add_vertex_checks(hz_1, G_thick_1)
+    elif logical_type_1 == "X":
+        hx_1, vertex2check_1 = add_vertex_checks(hx_1, G_thick_1)
+
+    edge2qubit_1 = edge2qubit(G_thick_1, n_1_ori)
+
+    # modify original check involved in perfect matching 
+    if logical_type_1 == "Z":
+        hx_1 = add_perfect_matching_checks(hx_1, G_thick_1, perfect_matchings_1)
+    elif logical_type_1 == "X":
+        hz_1 = add_perfect_matching_checks(hz_1, G_thick_1, perfect_matchings_1)
+
+    # add cycle checks to fix gauge degrees of freedom
+    if logical_type_1 == "Z":
+        hx_1 = append_cycle_basis_checks(G_thick_1, hx_1, new_cycle_basis_1, hx_1.shape[1])
+    elif logical_type_1 == "X":
+        hz_1 = append_cycle_basis_checks(G_thick_1, hz_1, new_cycle_basis_1, hz_1.shape[1])
+
+    ######################## Construct Ancilla System Graph for the Second Code ########################
+
+    # load the code
+    with open(f"{benchmark_path}/{file_name_2}.pkl", "rb") as f:
+        data_2 = pickle.load(f)
+
+    qcode_2 = data_2["qcode"]
+
+    with open(output_path, "a") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            print("Testing original code 2...")
+            qcode_2.test()
+            print("\n")
+
+    lz_2 = qcode_2.lz; lx_2 = qcode_2.lx
+    hz_2 = qcode_2.hz.toarray(); hx_2 = qcode_2.hx.toarray()
+    k = lz_2.shape[0]; n = lz_2.shape[1]
+
+    if logical_type_2 == "Z":
+        logical_op_2 = lz_2[logical_idx_2[0], :].copy()
+        other_h_2 = hx_2
+    elif logical_type_2 == "X":
+        logical_op_2 = lx_2[logical_idx_2[0], :].copy()
+        other_h_2 = hz_2
+
+    for idx in logical_idx_2[1:]:
+        if logical_type_2 == "Z":
+            logical_op_2 = logical_op_2 + lz_2[idx, :]
+        else:
+            logical_op_2 = logical_op_2 + lx_2[idx, :]
+
+    logical_op_2.data %= 2
+    logical_op_2.eliminate_zeros()
+
+    # Step 1: Construct vertex of graph and the bijection fuction
+    G_2, qubit_to_vertex_2 = create_graph_GeneCS(logical_op_2)
+
+    # Step 2: Construct the perfect matching
+    G_2, perfect_matchings_2 = construct_perfect_matching_GeneCS(G_2, qubit_to_vertex_2, logical_op_2, other_h_2)
+
+    # Step 3: Congestion-aware expansion of graph
+    # 2 reserved for vertex checks, 2 reserved for perfect matching or thickening per edge
+    G_base_2, _, cycle_basis_2, groups_2 = congestion_aware_expander_sweep_GeneCS(G_2, sample_num, edge_key="exp", max_edge_degree=qubit_degree_2-4)
+
+    # Step 4: Thickening
+    beta_2 = cheeger_lower_bound(G_base_2)
+    if abs(1 - beta_2) < 1e-6:
+        beta_2 = 1.0
+    L_2 = max(math.ceil(1 / beta_2), len(groups_2))
+    G_thick_2 = thicken_graph(G_base_2, L_2)
+
+    # Step 5: Cellulation
+    new_cycle_basis_2 = cellulation_GeneCS(G_thick_2, groups_2, cycle_basis_2, d=check_degree_2)
+    new_cycle_basis_2 = add_interlayer_rectangle_cycles_GeneCS(G_thick_2, G_base_2, L_2, new_cycle_basis_2)
+
+    data = {
+        "G_thick": G_thick_2,
+        "perfect_matching": perfect_matchings_2, 
+        "cycle_basis": new_cycle_basis_2, 
+        "HX": hx_2,
+        "HZ": hz_2,
+        "logical_type": logical_type_2,
+        "logical_idx": logical_idx_2,
+        "logical_op": logical_op_2,
+    }
+
+    with open(f"{saving_path}/deform_graph/{file_name_2}_merge_{logical_type_2}_{logical_idx_2}.pkl", "wb") as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    ######################## Code Deformation for the First Code ########################
+
+    nodes_2, edges_2 = find_d_nodes_tree(G_thick_2, adapter_size)
+    G_tree_2, column_dict_2, row_dict_2 = incidence_matrix(nodes_2, edges_2)
+    T_2,P_2 = skip_tree(G_tree_2)
+
+    # Construct the parity check matrix for derformed code
+    E_2 = G_thick_2.number_of_edges()
+    n_2_ori = hz_2.shape[1]
+    hz_2 = enlarge_parity_check(hz_2, E_2)
+    hx_2 = enlarge_parity_check(hx_2, E_2)
+
+    # add new vertex check
+    if logical_type_2 == "Z":
+        hz_2, vertex2check_2 = add_vertex_checks(hz_2, G_thick_2)
+    elif logical_type_2 == "X":
+        hx_2, vertex2check_2 = add_vertex_checks(hx_2, G_thick_2)
+
+    edge2qubit_2 = edge2qubit(G_thick_2, n_2_ori)
+
+    # modify original check involved in perfect matching 
+    if logical_type_2 == "Z":
+        hx_2 = add_perfect_matching_checks(hx_2, G_thick_2, perfect_matchings_2)
+    elif logical_type_2 == "X":
+        hz_2 = add_perfect_matching_checks(hz_2, G_thick_2, perfect_matchings_2)
+
+    # add cycle checks to fix gauge degrees of freedom
+    if logical_type_2 == "Z":
+        hx_2 = append_cycle_basis_checks(G_thick_2, hx_2, new_cycle_basis_2, hx_2.shape[1])
+    elif logical_type_2 == "X":
+        hz_2 = append_cycle_basis_checks(G_thick_2, hz_2, new_cycle_basis_2, hz_2.shape[1])
+
+    ######################## Merge Two Codes ########################
+
+    m1_z, n1_z = hz_1.shape
+    m2_z, n2_z = hz_2.shape
+    m1_x, n1_x = hx_1.shape
+    m2_x, n2_x = hx_2.shape
+
+    hz = combine_parity_check(hz_1, hz_2)
+    hx = combine_parity_check(hx_1, hx_2)
+
+    hz = enlarge_parity_check(hz, adapter_size)
+    hx = enlarge_parity_check(hx, adapter_size)
+
+    # add Adapter edges
+    if logical_type_1 == "Z":
+        hz = add_adapter(hz, P_1, P_2, vertex2check_1, vertex2check_2, column_dict_1, column_dict_2, m1_z, n1_z, m2_z, n2_z, adapter_size)
+    elif logical_type_1 == "X":
+        hx = add_adapter(hx, P_1, P_2, vertex2check_1, vertex2check_2, column_dict_1, column_dict_2, m1_x, n1_x, m2_x, n2_x, adapter_size)
+
+    # add Adapter cycles
+    if logical_type_1 == "Z":
+        hx = add_adapter_cycle(hx, T_1, T_2, edge2qubit_1, edge2qubit_2, row_dict_1, row_dict_2, m1_x, n1_x, m2_x, n2_x, adapter_size)
+    elif logical_type_1 == "X":
+        hz = add_adapter_cycle(hz, T_1, T_2, edge2qubit_1, edge2qubit_2, row_dict_1, row_dict_2, m1_z, n1_z, m2_z, n2_z, adapter_size)
+
+    t1 = time.time()
+
+    new_qubit_num = G_thick_1.number_of_edges()+G_thick_2.number_of_edges()+adapter_size
+    new_check_num = len(new_cycle_basis_1) + G_thick_1.number_of_nodes()+len(new_cycle_basis_2) + G_thick_2.number_of_nodes()+adapter_size
+    print("Number of new qubits:", G_thick_1.number_of_edges()+G_thick_2.number_of_edges()+adapter_size)
+    print("Number of new qubits:", G_thick_1.number_of_edges()+G_thick_2.number_of_edges()+adapter_size, file=output_file)
+    print("Number of new checks:", len(new_cycle_basis_1) + G_thick_1.number_of_nodes()+len(new_cycle_basis_2) + G_thick_2.number_of_nodes()+adapter_size)
+    print("Number of new checks:", len(new_cycle_basis_1) + G_thick_1.number_of_nodes()+len(new_cycle_basis_2) + G_thick_2.number_of_nodes()+adapter_size, file=output_file)
+
+    check_degree, qubit_degree = compute_max_degrees(hx, hz)
+    print("\n", file=output_file)
+    print("Max qubit degree:", qubit_degree)
+    print("Max qubit degree:", qubit_degree, file=output_file)
+    print("Max check degree:", check_degree)
+    print("Max check degree:", check_degree, file=output_file)
+
+    print("\n", file=output_file)
+    print("Compilation time:", t1-t0, file=output_file)
+
+    qcode=css_code(hx,hz)
+    with open(output_path, "a") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            print("Testing merged code...")
+            qcode.test()
+            print("\n")
+
+    deform_code = {
+        "qcode": qcode,
+    }
+
+    with open(output_path, "a") as f:   
+        with redirect_stdout(f), redirect_stderr(f):
+            compute_global_distribution(hx, hz)
+            print("\n")
+
+    with open(f"{saving_path}/deform_code/{file_name_1}_{file_name_2}_merged.pkl", "wb") as f:
+        pickle.dump(deform_code, f)
+
+    file_name = file_name_1 + '+' + file_name_2
+
+    # Save selected values as CSV
+    df = pd.DataFrame([{
+        'file_name': file_name,
+        ' qubit_num': new_qubit_num,
+        ' check_num': new_check_num,
+        ' qubit_deg': qubit_degree,
+        ' check_deg': check_degree,
+        ' Comp_time': t1-t0, 
+    }])
+
+    df.to_csv(f'output.csv', mode='a', header=not pd.io.common.file_exists(f'output.csv'), index=False)
