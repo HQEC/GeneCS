@@ -1879,7 +1879,7 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
         ' Comp_time': t1-t0, 
     }])
 
-    df.to_csv(f'{saving_path}/output.csv', mode='a', header=not pd.io.common.file_exists(f'output.csv'), index=False)
+    df.to_csv(f'{saving_path}/output.csv', mode='a', header=not pd.io.common.file_exists(f'{saving_path}/output.csv'), index=False)
 
 
 def crosscode_synthesis(file_name_1, file_name_2, logical_type_1, logical_type_2, logical_idx_1, logical_idx_2, qubit_degree_1, qubit_degree_2, check_degree_1, check_degree_2, sample_num, adapter_size, benchmark_path= './benchmark', saving_path = './bin'):
@@ -2174,4 +2174,4 @@ def crosscode_synthesis(file_name_1, file_name_2, logical_type_1, logical_type_2
         ' Comp_time': t1-t0, 
     }])
 
-    df.to_csv(f'output.csv', mode='a', header=not pd.io.common.file_exists(f'output.csv'), index=False)
+    df.to_csv(f'{saving_path}/output.csv', mode='a', header=not pd.io.common.file_exists(f'{saving_path}/output.csv'), index=False)
