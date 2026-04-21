@@ -959,6 +959,20 @@ def bfs_spanning_tree(G, root=None):
 
     return T
 
+def connect_graph_minimally(G):
+ 
+    components = [list(c) for c in nx.connected_components(G)]
+
+    if len(components) == 1:
+        return G
+
+    for i in range(len(components) - 1):
+        u = components[i][0]
+        v = components[i + 1][0]
+        G.add_edge(u, v, key="exp")
+
+    return G
+
 def congestion_aware_expander_GeneCS(
     G0,
     seed=0,
@@ -971,6 +985,7 @@ def congestion_aware_expander_GeneCS(
     G0 is NOT modified.
     """
     G = G0.copy()
+    G = connect_graph_minimally(G)
     rng = random.Random(seed)
     history = []
     step = 0
@@ -1767,7 +1782,7 @@ def innercode_synthesis(file_name, logical_type, logical_idx, qubit_degree, chec
     # Step 3: Congestion-aware expansion of graph
     # 2 reserved for vertex checks, 2 reserved for perfect matching or thickening per edge
     G_base, _, cycle_basis, groups = congestion_aware_expander_sweep_GeneCS(G, sample_num, edge_key="exp", max_edge_degree=qubit_degree-4)
-
+    
     # Step 4: Thickening
     beta = cheeger_lower_bound(G_base)
     if abs(1 - beta) < 1e-6:
